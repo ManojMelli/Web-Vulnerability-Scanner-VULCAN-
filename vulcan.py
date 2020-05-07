@@ -1,0 +1,105 @@
+import Scanner
+import sqli_scanner
+import csrf_scanner
+import xss_scanner
+from bs4 import BeautifulSoup
+import argparse
+import requests
+from colorama import Fore, init
+import pathlib
+import logging
+
+init(autoreset=True)
+logging.basicConfig(filename='ScanReport.txt', filemode='w', level=logging.INFO, format='%(message)s')
+logger = logging.getLogger('logger')
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-u', '--url', required=True, type=str, dest='target_url', help='URL of the application to scan',
+                    metavar='targetURL')
+parser.add_argument('-l', '--login', action='store_true', dest='login_required', help='Login required')
+password = ''
+target_url = ''
+try:
+    args = parser.parse_args()
+except argparse.ArgumentError and argparse.ArgumentTypeError:
+    print(Fore.RED + "[***] Error in the arguments provided")
+    logger.error("[***] Error in the arguments provided")
+    exit()
+target_url = args.target_url
+if not target_url.endswith('/'):
+    target_url += '/'
+vulcan = Scanner.Scanner(target_url, logger)
+
+if args.login_required:
+    login_url = input('Login URL: ')
+    username = input('Username: ')
+    password = input('Password: ')
+    try:
+        response = vulcan.session.get(login_url)
+    except requests.exceptions.ConnectionError:
+        print(Fore.RED + '[***] Could not connect to the application. Check the Internet connection'
+                         ' and Target Application status')
+        logger.error('[***] Could not connect to the application. Check the Internet connection'
+                     ' and Target Application status')
+        exit()
+    except requests.exceptions.InvalidSchema:
+        print(Fore.RED + '[***] Error in the format of the provided URL')
+        logger.error('[***] Error in the format of the provided URL')
+        exit()
+    parsed_html = BeautifulSoup(response.content, 'html.parser')
+    login_form = parsed_html.findAll("form")[0]
+    login_data = {}
+    for inputs in login_form.findAll("input"):
+        name = inputs.get("name")
+        value = inputs.get("value")
+        if name == "username":
+            login_data[name] = username
+        elif name == 'password':
+            login_data[name] = password
+        else:
+            login_data[name] = value
+    try:
+        vulcan.session.post(login_url, data=login_data)
+    except requests.exceptions.ConnectionError:
+        print(Fore.RED + '[***] Could not connect to the application. Check the Internet connection'
+                         ' and Target Application status')
+        logger.error('[***] Could not connect to the application. Check the Internet connection'
+                     ' and Target Application status')
+        exit()
+    except requests.exceptions.InvalidSchema:
+        print(Fore.RED + '[***] Error in the format of the provided URL')
+        logger.error('[***] Error in the format of the provided URL')
+        exit()
+
+print(Fore.GREEN + '\n************************* Creating SiteMap **************************\n')
+logger.info('\n************************* Creating SiteMap **************************\n')
+vulcan.crawl()
+
+scan_xss = xss_scanner.Xss_Scanner(vulcan.session, password, logger)
+scan_csrf = csrf_scanner.Csrf_Scanner(vulcan.session, password, logger)
+scan_sqli = sqli_scanner.Sqli_Scanner(vulcan.session, password, logger)
+
+# '''
+for link in vulcan.target_links:
+    print('\n[+] Testing the link ' + Fore.CYAN + link + '\n')
+    print(Fore.GREEN + '\n************************* Testing for XSS **************************\n')
+    logger.info('\n************************* Testing for XSS **************************\n')
+    scan_xss.run_xss_test(link)
+    print(Fore.GREEN + '\n************************* Testing for CSRF *************************\n')
+    logger.info('\n************************* Testing for CSRF *************************\n')
+    scan_csrf.run_csrf_test(link)
+    print(Fore.GREEN + '\n************************* Testing for SQLI *************************\n')
+    logger.info('\n************************* Testing for SQLI *************************\n')
+    scan_sqli.run_sqli_test(link)
+
+# '''
+print('\n**************************** Summary of the SCAN ******************************\n')
+if scan_xss.count_xss == 0 and scan_csrf.count_csrf == 0 and scan_sqli.count_sqli == 0:
+    print(Fore.GREEN + '\nThe application is not vulnerable for the scanned vulnerabilities.\n')
+else:
+    print('\n1. XSS Vulnerability: ' + Fore.RED + str(scan_xss.count_xss))
+    print('\n2. CSRF Vulnerability: ' + Fore.RED + str(scan_csrf.count_csrf + scan_xss.count_xss))
+    print('\n3. SQLI Vulnerability: ' + Fore.RED + str(scan_sqli.count_sqli))
+
+print('\nThe scan report is saved in ' + Fore.GREEN + str(pathlib.Path().absolute()) + '\\ScanReport.txt')
+vulcan.session.close()

@@ -1,0 +1,165 @@
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup
+from colorama import Fore, init
+
+init(autoreset=True)
+
+xss_script_low = "<script>alert('test');</script>"
+xss_script_medium = "<ScRipT>alert('test');</ScRipT>"
+xss_script_high = "<img src='X' onerror=alert('test');>"
+
+
+class Xss_Scanner:
+    def __init__(self, session, password, logger):
+        self.session = session
+        self.password = password
+        self.logger = logger
+        self.count_xss = 0
+
+    def extract_forms(self, url):
+        try:
+            response = self.session.get(url)
+        except requests.exceptions.ConnectionError:
+            print(Fore.RED + '[***] Could not connect to the application. Check the Internet connection and'
+                             ' Target Application status')
+            self.logger.error('[***] Could not connect to the application. Check the Internet connection and'
+                              ' Target Application status')
+            exit()
+        except requests.exceptions.InvalidSchema:
+            print(Fore.RED + '[***] Error in the format of the provided URL')
+            exit()
+        parsed_html = BeautifulSoup(response.content, 'html.parser')
+        return parsed_html.findAll("form")
+
+    def submit_form(self, form, value, url):
+        action = form.get("action")
+        post_url = urljoin(url, action)
+        method = form.get("method")
+
+        inputs_list = form.findAll("input")
+        post_data = {}
+        for inputs in inputs_list:
+            input_name = inputs.get("name")
+            input_type = inputs.get("type")
+            input_value = inputs.get("value")
+            if input_type == 'password':
+                input_value = self.password
+            if input_type == "text":
+                input_value = value
+
+            post_data[input_name] = input_value
+        try:
+            if method == "post":
+                return self.session.post(post_url, data=post_data)
+            return self.session.get(post_url, params=post_data)
+        except requests.exceptions.ConnectionError:
+            print(Fore.RED + '[***] Could not connect to the application. Check the Internet connection and'
+                             ' Target Application status')
+            self.logger.error('[***] Could not connect to the application. Check the Internet connection and'
+                              ' Target Application status')
+            exit()
+        except requests.exceptions.InvalidSchema:
+            print(Fore.RED + '[***] Error in the format of the provided URL')
+            self.logger.error('[***] Error in the format of the provided URL')
+            exit()
+
+    def run_xss_test(self, link):
+
+        print("\n[+] Testing forms in the " + link + " for XSS\n")
+        forms = self.extract_forms(link)
+        count = 0
+        form_count = 0
+        for form in forms:
+            if self.test_xss_in_form(form, link, 'low'):
+                count += 1
+                print(Fore.RED + "\n[***] The following form in the link " + link + " is highly vulnerable to XSS."
+                                                                                    " Security Risk: High\n")
+                self.logger.info("\n[***] The following form in the link " + link + " is highly vulnerable to XSS."
+                                                                                    " Security Risk: High\n")
+                print(form)
+                self.logger.info(form)
+                print(Fore.RED + "\n[***] The form is also vulnerable to CSRF due to the presence of XSS vulnerability."
+                                 " Security Risk: High\n")
+                self.logger.info("\n[***] The form is also vulnerable to CSRF due to the presence of XSS vulnerability."
+                                 " Security Risk: High\n")
+            else:
+                curr_form = self.extract_forms(link)[form_count]
+                if self.test_xss_in_form(curr_form, link, 'medium'):
+                    count += 1
+                    print(
+                        Fore.RED + "\n[***] The following form in the link " + link + "is moderately vulnerable to "
+                                                                                      "XSS. "
+                                                                                      " Security Risk: Medium\n")
+                    self.logger.info("\n[***] The following form in the link " + link + "is moderately vulnerable to "
+                                                                                        "XSS. "
+                                                                                        " Security Risk: Medium\n")
+                    print(form)
+                    self.logger.info(form)
+                    print(
+                        Fore.RED + "\n[***] The form is also vulnerable to CSRF due to the presence of XSS "
+                                   "vulnerability. "
+                                   " Security Risk: High\n")
+                    self.logger.info("\n[***] The form is also vulnerable to CSRF due to the presence of XSS "
+                                     "vulnerability. "
+                                     " Security Risk: High\n")
+                else:
+                    curr_form = self.extract_forms(link)[form_count]
+                    if self.test_xss_in_form(curr_form, link, 'high'):
+                        count += 1
+                        print(Fore.RED + "\n[***] The following form in the link " + link + " is vulnerable to XSS."
+                                                                                            " Security Risk: Low\n")
+                        self.logger.info("\n[***] The following form in the link " + link + " is vulnerable to XSS."
+                                                                                            " Security Risk: Low\n")
+                        print(form)
+                        self.logger.info(form)
+                        print(
+                            Fore.RED + "\n[***] The form is also vulnerable to CSRF due to the presence of XSS "
+                                       "vulnerability. "
+                                       " Security Risk: High\n")
+                        self.logger.info("\n[***] The form is also vulnerable to CSRF due to the presence of XSS "
+                                         "vulnerability. "
+                                         " Security Risk: High\n")
+            form_count += 1
+
+        if "=" in link:
+            print("\n[+] Testing the" + link + " for XSS\n")
+            is_vulnerable_to_xss = self.test_xss_in_url(link)
+            if is_vulnerable_to_xss:
+                count += 1
+                print(Fore.RED + "\n[***] Discovered XSS in " + link + "\n")
+                self.logger.info("\n[***] Discovered XSS in " + link + "\n")
+        if count == 0:
+            print('\n[+] The link is not vulnerable to XSS.\n')
+            self.logger.info('\n[+] The link is not vulnerable to XSS.\n')
+        else:
+            self.count_xss += count
+
+    def test_xss_in_form(self, form, url, security_level):
+        if security_level == 'low':
+            response = self.submit_form(form, xss_script_low, url)
+            return bytes(xss_script_low, 'utf-8') in response.content
+        elif security_level == 'medium':
+            response = self.submit_form(form, xss_script_medium, url)
+            return bytes(xss_script_medium, 'utf-8') in response.content
+        else:
+            response = self.submit_form(form, xss_script_high, url)
+            return bytes(xss_script_high, 'utf-8') in response.content
+
+    def test_xss_in_url(self, url):
+        url = url.replace("=", "=" + xss_script_low)
+        response = self.session.get(url)
+        if bytes(xss_script_low, 'utf-8') in response.content:
+            return True
+        else:
+            url = url.replace("=", "=" + xss_script_medium)
+            response = self.session.get(url)
+            if bytes(xss_script_medium, 'utf-8') in response.content:
+                return True
+            else:
+                url = url.replace("=", "=" + xss_script_high)
+                response = self.session.get(url)
+                if bytes(xss_script_high, 'utf-8') in response.content:
+                    return True
+                return False
